@@ -44,3 +44,4 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 .positai
+01_exposure_response_functions/death6924.RDS

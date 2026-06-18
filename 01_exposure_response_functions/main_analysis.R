@@ -13,12 +13,12 @@ library(ggplot2) ; library(patchwork) # PLOTTING TOOLS
 ### save environment with everything
 # SET DIRECTORY OF DATA INPUT
 
-dir <- "/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/death data"
-dirout <- "/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/01_exposure_response_functions/"
+# dir <- "/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/death data"
+# dirout <- "/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/01_exposure_response_functions/"
 
 lookup <- fread("/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/Boundaries_and_shapefiles/Gemeindestand_lookup_districts.csv")
 
-listdistrictname <- unique(lookup$Bezirksname)
+listdistrictname <- unique(lookup$Bezirks-nummer)
 head(lookup)
 
 # SPECIFICATION OF THE EXPOSURE FUNCTION
@@ -47,7 +47,7 @@ predper <- c(seq(0,1,0.1),2:98,seq(99,100,0.1))
 average_dist_district <- matrix(NA, nrow=length(predper), ncol=length(listdistrictname))
 
 # Load min mortality function
-source("01_exposure_response_functions/findmin.R")
+source('/Users/jv24t611/Library/CloudStorage/OneDrive-UniversitaetBern/my projects/team_project/team_project_june_26/01_exposure_response_functions/findmin.R')
 
 #each element include municipalities within each district
 dlist<- split(lookup$`BFS Gde-nummer`, lookup$`Bezirks-nummer`)
@@ -55,7 +55,7 @@ dlist<- split(lookup$`BFS Gde-nummer`, lookup$`Bezirks-nummer`)
 
 firststage<-list()
 cp_list <- list()
-coefall <- matrix(NA, nrow=length(dlist), ncol=9)
+coefall <- matrix(NA, nrow=length(dlist), ncol=3)
 vcovall <- list()
 
 
@@ -120,7 +120,7 @@ modfull <- gnm(dcount ~ cbtmean ,
 
 mmti<-findmin(cbtmean, model=modfull, from=quantile(datafull$tmean, 0.25), to=quantile(datafull$tmean, 0.90)) #check the function
 
-cp_list[[i]] <- crosspred(cbtmean, modfull, cen=mmti)
+cp_list[[i]] <- crossreduce(cbtmean, modfull, cen=mmti)
 
 coefall[i,] <-  cp_list[[i]]$coefficients
 vcovall[[i]] <-  cp_list[[i]]$vcov
@@ -140,25 +140,62 @@ names(vcovall) <- names(dlist)
 #Store coefficients and variance-covariance matrices
 firststage <-list(coefall=coefall, vcovall=vcovall)
 
-pdf(paste0("01_exposure_response_functions/firststageplots_bydistricts.pdf"))
+pdf(paste0("01_exposure_response_functions/firststageplots_bydistricts_3days.pdf"))
 for(x in 1:length(cp_list)){
-  plot(cp_list[[x]], "overall")
+  plot(cp_list[[x]],
+       main=paste("First stage",  names(cp_list)[x])
+  )
 }
 dev.off()
 
 saveRDS(cp_list, "01_exposure_response_functions/crosspreds_stage1.rds")
 saveRDS(firststage, "01_exposure_response_functions/coeffs_vcov_stage1.rds")
 
+# second stage analyses
 
+# add district numbers to temperature data
+temp14.m <- merge(temp14, lookup%>%
+                    select(Kanton, `BFS Gde-nummer`, `Bezirks-nummer`), by.x="muncode", by.y="BFS Gde-nummer")
+# summary(temp14.m)
+# View(temp14.m[is.na(`Bezirks-nummer`)])
 #
 # #predictors
-# avgtmean   <- sapply(dlist,function(x) mean(x$tmean_CRU,na.rm=TRUE)) #average of mean temperature (ºC)
-# rangetmean <- sapply(dlist,function(x) diff(range(x$tmean_CRU,na.rm=TRUE))) #range of mean temperature (ºC)
+temp14.m <- temp14.m[lubridate::month(date)%in%6:9,]
+avgtmean <- temp14.m[, mean(tmean, na.rm=T), by=c("Bezirks-nummer", "Kanton")]
+rangetmean <- temp14.m[, c("min","max"):= as.list(range(tmean, na.rm=T)), by=c("Bezirks-nummer", "Kanton")]
+
+
+rangetmean <- unique(rangetmean%>%select(`Bezirks-nummer`, min, max))
+rangetmean[, rangetmean:=(max-min)]
+
+metavarALL <- cbind(rangetmean, avgtmean[,-1])
+metavarALL$avgtmean <- metavarALL$V1
+# avgtmean   <- sapply(temp14.m,function(x) mean(x$tmean,na.rm=TRUE)) #average of mean temperature (ºC)
+# rangetmean <- sapply(dlist,function(x) diff(range(x$tmean,na.rm=TRUE))) #range of mean temperature (ºC)
 #
 # metavarALL<-data.frame(avgtmean=avgtmean, rangetmean=rangetmean, district=district, district=district)
 #
-# coefmeta <- coefall
-# vcovmeta <- vcovall
+coefmeta <- coefall
+vcovmeta <- vcovall
+
+# mvall <- mixmeta(coefmeta~rangetmean+avgtmean,vcovmeta, metavarALL,
+#                  control=list(showiter=T), random=~1|`Kanton`/`Bezirks-nummer`, method="reml")
+mvall <- mixmeta::mixmeta(coefmeta~rangetmean+avgtmean,vcovmeta, metavarALL,
+                 control=list(showiter=T), random=~1|Kanton/`Bezirks-nummer`, method="reml")
+
+#
+# # BLUPS AT district LEVEL FROM TWO-LEVEL MODEL
+# districtblup <- exp(blup(mvall))
+
+# rownames(districtblup) <- names(cp_list)[1:143]
+
+
+
+
+saveRDS(blup, "01_exposure_response_functions/secondstage.rds")
+
+
+
 #
 #
 #
@@ -177,3 +214,66 @@ saveRDS(firststage, "01_exposure_response_functions/coeffs_vcov_stage1.rds")
 #
 #
 #
+
+temp14.m <- temp14.m[lubridate::month(date)%in%6:9,]
+avgtmean <- temp14.m[, mean(tmean, na.rm=T), 
+                     by=c("Bezirks-nummer", "Kanton")]
+avgrange_district <- temp14.m[, .(avgtmean = mean(tmean, na.rm = TRUE),
+                                  rangetmean  = max(tmean, na.rm = TRUE)-min(tmean, na.rm = TRUE)),
+                              by = .(`Bezirks-nummer`, Kanton)]
+predper <- c(seq(0,1,0.1),2:98,seq(99,100,0.1))
+qt_district <- temp14.m[, .(percentile = predper,
+                            quantile   = quantile(tmean, probs = predper / 100)), 
+                        by = .(`Bezirks-nummer`)] 
+qt_district_wide <- dcast(data=qt_district, percentile ~ `Bezirks-nummer`,
+                          value.var = "quantile")
+
+
+meanaverage_dist_district <- rowMeans(qt_district_wide[,-1])
+knots <- meanaverage_dist_district [predper %in% c(50,90)]
+bvar <- onebasis(meanaverage_dist_district , fun="ns", knots=knots)
+
+
+newdata <- data.frame(avgtmean=mean(avgrange_district$avgtmean), 
+                      rangetmean=mean(avgrange_district$rangetmean))
+
+predfit <- predict(mvall, newdata=newdata, vcov=T)
+predpool <- crosspred(bvar, coef=predfit$fit, vcov=predfit$vcov,
+                      model.link="log", at=meanaverage_dist_district, cen=15)
+plot(predpool)
+
+#RUN FOR BLUP
+blup <- mixmeta::blup(mvall, vcov=T)
+qt_district_wide <- qt_district_wide[,-1]
+
+pdf("/Volumes/FS/_ISPM/CCH/AnnualTeamProject2026/exp_response/blups_districts.pdf",width=9,height=13)
+layout(matrix(seq(5*3),nrow=5,byrow=T))
+par(mar=c(4,3.8,3,2.4),mgp=c(2.5,1,0),las=1)
+
+
+mintempdistrict <- rep(NA,143)
+for(i in 1:143) {
+  
+  predvar <- qt_district_wide[[i]]
+  
+  # REDEFINE THE FUNCTION USING ALL THE ARGUMENTS (BOUNDARY KNOTS INCLUDED)
+  argvar <- list(x=predvar,fun=varfun,
+                 knots=qt_district_wide[predper %in% varper,i, with = FALSE][[1]],
+                 Bound=qt_district_wide[c(1,length(predper)),i, with = FALSE][[1]])
+  if(!is.null(vardegree)) argvar$degree <- vardegree
+  bvar <- do.call(dlnm::onebasis,argvar)
+  
+  ### ERC PLOTS
+  minperdistrict <- (50:90)[which.min((bvar%*%blup[[i]]$blup)[50:90])]
+  mintempdistrict[i] <- qt_district_wide[predper==minperdistrict,i, with = FALSE]
+  predblup <- crosspred(bvar,coef=blup[[i]]$blup,vcov=blup[[i]]$vcov,
+                                 model.link="log",by=0.1,cen=mintempdistrict[i])
+  
+  plot(predblup,ylim=c(0,2.5),lab=c(6,5,7),xlab="Mean Temperature",
+       ylab="Relative Risk", main=names(cp_list)[i], col="red",
+       ci.arg=list(col=alpha("red",0.1)),lwd=1.5)
+  
+}
+dev.off()
+
+
